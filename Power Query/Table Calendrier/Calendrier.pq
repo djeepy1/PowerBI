@@ -1,0 +1,47 @@
+let
+    StartDate = StartDate,
+    EndDate = DateTime.Date(Date.EndOfYear(DateTime.FixedLocalNow())),
+    NumberOfDays = Duration.Days( EndDate - StartDate ),
+    Dates = List.Dates(StartDate, NumberOfDays+1, #duration(1,0,0,0)),
+    #"Converti en table" = Table.FromList(Dates, Splitter.SplitByNothing(), null, null, ExtraValues.Error),
+    #"Année insérée" = Table.AddColumn(#"Converti en table", "Année", each Date.Year([Column1]), Int64.Type),
+    #"Mois inséré" = Table.AddColumn(#"Année insérée", "Mois", each Date.Month([Column1]), Int64.Type),
+    #"Calculate FY (value)" = Table.AddColumn(#"Mois inséré", "Fiscal_year", each if [Mois]>=7 then [Année]+1 else [Année]),
+    #"Calculate Fiscal Month" = Table.AddColumn(#"Calculate FY (value)", "Mois Fiscal (num)", each if [Mois]>= 7 then [Mois]-6 else [Mois]+6),
+    #"Calculate Fiscal Month (leading zero)" = Table.AddColumn(#"Calculate Fiscal Month", "Mois Fiscal", each Text.End("0" & Text.From([#"Mois Fiscal (num)"]),2)),
+    #"Calculate MonthName" = Table.AddColumn(#"Calculate Fiscal Month (leading zero)", "Nom du mois", each Date.MonthName([Column1], "fr-FR"), type text),
+    #"Fix MonthName case" = Table.TransformColumns(#"Calculate MonthName",{{"Nom du mois", Text.Proper, type text}}),
+    #"Affichez les mois avec des zéros" = Table.AddColumn(#"Fix MonthName case", "Mois (numéro)", each Text.PadStart(Text.From([Mois]),2,"0")),
+    #"Cleanup (column_name)" = Table.RenameColumns(#"Affichez les mois avec des zéros",{{"Column1", "Date"},{"Fiscal_year", "Année Fiscale"},{"Mois","Mois_numerique"},{"Nom du mois", "Mois (nom)"}}),
+    #"Calculate CY" = Table.AddColumn(#"Cleanup (column_name)", "Année (final)", each "CY" & Text.End(Text.From([Année], "fr-FR"), 2), type text),
+    #"Calculate FY" = Table.AddColumn(#"Calculate CY", "Année Fiscale (final)", each "FY" & Text.End(Text.From([Année Fiscale], "fr-FR"), 2), type text),
+    #"Calculate Full Month (label)" = Table.AddColumn(#"Calculate FY", "Mois", each Text.Combine({[#"Mois (nom)"], Text.From([Année], "fr-FR")}, " "), type text),
+    #"Calculate Full Month (sortby)" = Table.AddColumn(#"Calculate Full Month (label)", "Mois (tri)", each Text.Combine({Text.From([Année], "fr-FR"), [#"Mois (numéro)"]}, " "), type text),
+    #"Calculate Full Fiscal Month (sortby)" = Table.AddColumn(#"Calculate Full Month (sortby)", "Mois Fiscal (tri)", each Text.Combine({Text.From([Année Fiscale], "fr-FR"), [Mois Fiscal]}, " "), type text),
+    #"Ajout de la Semaine" = Table.AddColumn(#"Calculate Full Fiscal Month (sortby)", "Semaine (n°)", each Text.End("0" & Text.From(Date.WeekOfYear([Date])),2), type text),
+    #"Ajout du jour de la semaine" = Table.AddColumn(#"Ajout de la Semaine", "Jour de la semaine", each Text.End("0" & Text.From(Date.DayOfWeek([Date])),2), type text),
+    #"Calcul clé semaine" = Table.AddColumn(#"Ajout du jour de la semaine", "Semaine (clé)", each Text.Combine({Text.From([Année], "fr-FR"), [#"Semaine (n°)"]}, " "), type text),
+    #"Début de semaine inséré" = Table.AddColumn(#"Calcul clé semaine", "Semaine", each Date.StartOfWeek([Date]), type date),
+    EstFerié = Table.AddColumn(#"Début de semaine inséré", "Ouvrable", each if (EstFerié([Date])) then "Férié" else if ([Jour de la semaine] >= "05") then "Non" else "Oui", type text),
+    #"Ajout trimestre Fiscal" = Table.AddColumn(EstFerié, "Trimestre Fiscal", each "Q" & Number.ToText(Number.RoundDown((Number.FromText([Mois Fiscal])-1)/3)+1), type text),
+    #"Cleanup (Typage)" = Table.TransformColumnTypes(#"Ajout trimestre Fiscal",{{"Mois Fiscal", type text}, {"Date", type date}, {"Mois Fiscal (num)", type text}, {"Ouvrable", type text}, {"Trimestre Fiscal", type text}, {"Année", type text}, {"Mois_numerique", type text}, {"Année Fiscale", type text}, {"Mois (nom)", type text}, {"Mois (numéro)", type text}, {"Année (final)", type text}, {"Année Fiscale (final)", type text}, {"Mois", type text}, {"Mois (tri)", type text}, {"Mois Fiscal (tri)", type text}}),
+    #"Cleanup (Remove)" = Table.RemoveColumns(#"Cleanup (Typage)",{"Année Fiscale", "Mois_numerique"}),
+    #"Année actuelle Column" = Table.AddColumn(#"Cleanup (Remove)", "Année Actuelle", each if Date.Year([Date]) = Date.Year(DateTime.LocalNow()) then "Oui" else "Non", type text),
+    #"Année fiscale actuelle" = Table.AddColumn(#"Année actuelle Column", "Année Fiscale Actuelle", each if isInCurrentFiscalYear([Date]) then "Oui" else "Non", type text),
+    #"Mois actuel" = Table.AddColumn(#"Année fiscale actuelle", "Mois actuel", each if Date.Month([Date]) = Date.Month(DateTime.LocalNow()) then (if Date.Year([Date]) = Date.Year(DateTime.LocalNow()) then "Oui" else "Non") else "Non", type text),
+    #"Mois M - True / False" = Table.AddColumn(#"Mois actuel", "Est Mois M", each if [#"Mois (tri)"] = Number.ToText(Date.Year(DateTime.FixedLocalNow())) & " " & 
+    (if Date.Month(DateTime.FixedLocalNow()) < 10 then "0" & Number.ToText(Date.Month(DateTime.FixedLocalNow())) else  Number.ToText(Date.Month(DateTime.FixedLocalNow()))) then true else false, type logical),
+    #"Mois M-1 - True / False" = Table.AddColumn(#"Mois M - True / False", "Est Mois M-1", each if [#"Mois (tri)"] = Number.ToText(Date.Year(Date.AddMonths(DateTime.FixedLocalNow(),-1))) & " " & 
+    (if (Date.Month(Date.AddMonths(DateTime.FixedLocalNow(),-1))) < 10 then "0" & Number.ToText(Date.Month(Date.AddMonths(DateTime.FixedLocalNow(),-1))) else  Number.ToText(Date.Month(Date.AddMonths(DateTime.FixedLocalNow(),-1)))) then true else false, type logical),
+    #"Mois M+1 - True / False" = Table.AddColumn(#"Mois M-1 - True / False", "Est Mois M+1", each if [#"Mois (tri)"] = Number.ToText(Date.Year(Date.AddMonths(DateTime.FixedLocalNow(),+1))) & " " & 
+    (if (Date.Month(Date.AddMonths(DateTime.FixedLocalNow(),+1))) < 10 then "0" & Number.ToText(Date.Month(Date.AddMonths(DateTime.FixedLocalNow(),+1))) else  Number.ToText(Date.Month(Date.AddMonths(DateTime.FixedLocalNow(),+1)))) then true else false, type logical),
+    #"Mois M+2 - True / False" = Table.AddColumn(#"Mois M+1 - True / False", "Est Mois M+2", each if [#"Mois (tri)"] = Number.ToText(Date.Year(Date.AddMonths(DateTime.FixedLocalNow(),+2))) & " " & 
+    (if (Date.Month(Date.AddMonths(DateTime.FixedLocalNow(),+2))) < 10 then "0" & Number.ToText(Date.Month(Date.AddMonths(DateTime.FixedLocalNow(),+2))) else  Number.ToText(Date.Month(Date.AddMonths(DateTime.FixedLocalNow(),+2)))) then true else false, type logical),
+    #"Add column Mois_Actifs_M" = Table.AddColumn(#"Mois M+2 - True / False", "Est Mois Actif", each [Est Mois M] or [#"Est Mois M+1"] or [#"Est Mois M+2"], type logical),
+    #"Calculate Etat" = Table.AddColumn(#"Add column Mois_Actifs_M", "Etat", each if [Date] < Date.StartOfMonth(DateTime.Date(DateTime.LocalNow()))   then "Réel" else "Prévisionnel", type text),
+    #"Mois CurrentFiscal +3" = Table.AddColumn(#"Calculate Etat", "Est Fiscale en cours + 3M", each isInOffsetCurrentFiscal([Date],3), type logical),
+    #"Mois CurrentFiscal +1" = Table.AddColumn(#"Mois CurrentFiscal +3", "Est Fiscale en cours + 1M", each isInOffsetCurrentFiscal([Date],0), type logical),
+    #"Mois M - M+2" = Table.AddColumn(#"Mois CurrentFiscal +1", "Est Mois M -> M+2", each isInOffsetMonth([Date],0,2)),
+    #"Cleanup (renommage)" = Table.RenameColumns(#"Mois M - M+2",{{"Année (final)", "Année (calendaire)"}, {"Année Fiscale (final)", "Année Fiscale"}, {"Année", "Année (calendaire numérique)"}, {"Année Actuelle", "Est Année Actuelle"}, {"Mois actuel", "Est Mois actuel"}})
+in
+    #"Cleanup (renommage)"
